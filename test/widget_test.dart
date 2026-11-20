@@ -1,100 +1,101 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:untitled/registration.page.dart';
-import 'package:untitled/services/registration_service.dart';
+import 'package:untitled/src/domain/entities/failure.dart';
+import 'package:untitled/src/presentation/pages/registration_page.dart';
 
-class FakeRegistration implements RegistrationService {
-  @override
-  final notificationStatus = ValueNotifier<String>('FCM готов');
-  @override
-  final lastNotification = ValueNotifier<String>('');
-  int calls = 0;
-  String? email;
-  Completer<void>? pending;
-  bool fail = false;
-  @override
-  Future<void> register({
-    required String name,
-    required String email,
-    required String phone,
-    required String password,
-  }) async {
-    calls++;
-    this.email = email;
-    if (fail) throw StateError('Нет связи');
-    if (pending != null) await pending!.future;
-  }
+import 'fakes.dart';
 
-  @override
-  Future<void> retryNotifications() async {}
-  @override
-  Future<void> startNewRegistration() async {}
+Future<void> mount(
+  WidgetTester tester,
+  FakeAccount account,
+  MemoryDraft drafts,
+) async {
+  final cubit = makeCubit(account, drafts);
+  addTearDown(cubit.close);
+  await tester.pumpWidget(
+    MaterialApp(
+      home: BlocProvider.value(value: cubit, child: const RegistrationPage()),
+    ),
+  );
+  await tester.pumpAndSettle();
 }
 
-Future<void> fill(WidgetTester tester) async {
+Future<void> tap(WidgetTester t, String text) async {
+  final button = find.text(text);
+  await t.ensureVisible(button);
+  await t.tap(button);
+  await t.pump();
+}
+
+Future<void> fill(WidgetTester t) async {
   final fields = find.byType(TextFormField);
-  await tester.enterText(fields.at(0), 'Abdurauf');
-  await tester.enterText(fields.at(1), 'student@example.com');
-  await tester.enterText(fields.at(2), '+77001234567');
-  await tester.enterText(fields.at(3), 'Lab7password!');
-  await tester.ensureVisible(find.text('Зарегистрироваться'));
+  for (final (i, s) in [
+    'Student',
+    'student@example.org',
+    '+77001234567',
+    'SamplePass11',
+  ].indexed) {
+    await t.enterText(fields.at(i), s);
+  }
 }
 
 void main() {
-  testWidgets('Invalid form never sends data', (tester) async {
-    final service = FakeRegistration();
-    await tester.pumpWidget(
-      MaterialApp(home: RegistrationPage(service: service)),
-    );
-    await tester.ensureVisible(find.text('Зарегистрироваться'));
-    await tester.tap(find.text('Зарегистрироваться'));
-    await tester.pumpAndSettle();
-    expect(service.calls, 0);
+  testWidgets('Invalid form never sends a request', (t) async {
+    final a = FakeAccount();
+    await mount(t, a, MemoryDraft());
+    await tap(t, 'Зарегистрироваться');
+    expect(a.calls, 0);
     expect(find.text('Введите корректный email'), findsOneWidget);
   });
-
-  testWidgets('Success appears only after persistence completes', (
-    tester,
-  ) async {
-    final service = FakeRegistration()..pending = Completer<void>();
-    await tester.pumpWidget(
-      MaterialApp(home: RegistrationPage(service: service)),
-    );
-    await fill(tester);
-    await tester.tap(find.text('Зарегистрироваться'));
-    await tester.pump();
-    expect(service.calls, 1);
-    expect(find.text('Регистрация успешна'), findsNothing);
-    expect(
-      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-      isNull,
-    );
-    service.pending!.complete();
-    await tester.pumpAndSettle();
-    expect(find.text('Регистрация успешна'), findsOneWidget);
-    expect(service.email, 'student@example.com');
-  });
-
-  testWidgets('Failure allows retry and never shows success', (tester) async {
-    final service = FakeRegistration()..fail = true;
-    await tester.pumpWidget(
-      MaterialApp(home: RegistrationPage(service: service)),
-    );
-    await fill(tester);
-    await tester.tap(find.text('Зарегистрироваться'));
-    await tester.pumpAndSettle();
-    expect(find.text('Регистрация успешна'), findsNothing);
-    expect(find.textContaining('Не удалось сохранить данные'), findsOneWidget);
-    expect(
-      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-      isNotNull,
-    );
-    service.fail = false;
-    await tester.tap(find.text('Зарегистрироваться'));
-    await tester.pumpAndSettle();
-    expect(service.calls, 2);
+  testWidgets(
+    'Confirmation waits for persistence and blocks duplicate requests',
+    (t) async {
+      final a = FakeAccount()..pending = Completer<void>();
+      await mount(t, a, MemoryDraft());
+      await fill(t);
+      await tap(t, 'Зарегистрироваться');
+      expect(a.calls, 1);
+      expect(find.text('Регистрация успешна'), findsNothing);
+      expect(
+        t.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+        isNull,
+      );
+      a.pending!.complete();
+      await t.pumpAndSettle();
+      expect(find.text('Регистрация успешна'), findsOneWidget);
+      expect(a.submitted!.email, 'student@example.org');
+    },
+  );
+  testWidgets('Failure is readable and retry succeeds', (t) async {
+    final a = FakeAccount()..failure = const NetworkFailure();
+    await mount(t, a, MemoryDraft());
+    await fill(t);
+    await tap(t, 'Зарегистрироваться');
+    await t.pumpAndSettle();
+    expect(find.textContaining('Нет связи с сервером'), findsOneWidget);
+    a.failure = null;
+    await tap(t, 'Зарегистрироваться');
+    await t.pumpAndSettle();
+    expect(a.calls, 2);
     expect(find.text('Регистрация успешна'), findsOneWidget);
   });
+  testWidgets(
+    'Saved contact can be restored or cleared without restoring a password',
+    (t) async {
+      final drafts = MemoryDraft()..data = validContact.normalized;
+      await mount(t, FakeAccount(), drafts);
+      await tap(t, 'Восстановить');
+      final fields = t
+          .widgetList<TextFormField>(find.byType(TextFormField))
+          .toList();
+      expect(fields[1].controller!.text, 'student@example.org');
+      expect(fields[3].controller!.text, isEmpty);
+      await tap(t, 'Удалить черновик');
+      await t.pumpAndSettle();
+      expect(find.text('Сохранённого черновика нет.'), findsOneWidget);
+    },
+  );
 }

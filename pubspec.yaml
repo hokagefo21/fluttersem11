@@ -1,5 +1,5 @@
 name: untitled
-description: "A new Flutter project."
+description: "Firebase registration with Clean Architecture and optional local drafts."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -38,6 +38,8 @@ dependencies:
   firebase_database: ^13.0.1
   firebase_messaging: ^17.0.1
   firebase_auth: ^7.0.1
+  shared_preferences: ^2.5.3
+  flutter_bloc: ^9.1.1
   flutter_local_notifications: ^22.3.3
 
 dev_dependencies:
